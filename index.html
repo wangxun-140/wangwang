@@ -734,6 +734,8 @@ function monthTxs(){return txsOf(state.ym.y,state.ym.m)}
 function prevYM(y,m,n){m-=n;while(m<1){m+=12;y--}return {y,m}}
 const sumOut=a=>a.filter(t=>t.type==="out").reduce((s,t)=>s+net(t),0);
 const sumIn=a=>a.filter(t=>t.type==="in").reduce((s,t)=>s+t.amount,0);
+const noRepay=a=>a.filter(t=>t.cat!=="还款");
+const budgetSpent=a=>sumOut(noRepay(a));
 function byCat(a){const m={};a.filter(t=>t.type==="out").forEach(t=>{const v=net(t);if(v>0)m[t.cat]=(m[t.cat]||0)+v});return m}
 function pct(a,b){return b?Math.round((a-b)/b*100):null}
 function niceMax(v){if(v<=0)return 100;const p=Math.pow(10,Math.floor(Math.log10(v)));const n=v/p;return (n<=1?1:n<=2?2:n<=5?5:10)*p}
@@ -748,15 +750,15 @@ function render(){
   $("sumHint").textContent=state.ym.m+" 月 · "+txs.length+" 笔";
   $("listOut").textContent="¥"+fmt(out);$("listIn").textContent="¥"+fmt(inc);
   const pend=state.txs.filter(t=>t.biz&&t.biz.status==="pending");$("pendBox").hidden=!pend.length;$("monthSummary").classList.toggle("three",pend.length>0);$("listPend").textContent="¥"+fmt(pend.reduce((a,t)=>a+t.amount,0));
-  renderQuick(out);renderBudget(out);renderDonut(txs,out);renderChart(txs);renderList(txs);renderAnalysis(txs,out,inc);renderTrend();
+  const bOut=budgetSpent(txs);renderQuick(out,bOut);renderBudget(bOut,out-bOut);renderDonut(txs,out);renderChart(txs);renderList(txs);renderAnalysis(txs,out,inc);renderTrend();
 }
-function renderQuick(out){
+function renderQuick(out,bOut){
   $("qLabel").textContent=state.ym.m+" 月已支出";$("qSpent").textContent="¥"+fmt(out);
   const q=$("qLeft");
   if(!state.budget){q.textContent="未设置";q.className="num"}
-  else{const left=state.budget-out;q.textContent=(left<0?"超支 ¥":"¥")+fmt(Math.abs(left));q.className="num"+(left<0?" over":"")}
+  else{const left=state.budget-bOut;q.textContent=(left<0?"超支 ¥":"¥")+fmt(Math.abs(left));q.className="num"+(left<0?" over":"")}
 }
-function renderBudget(out){
+function renderBudget(out,repay){
   const box=$("budgetBox");
   if(!state.budget){box.innerHTML=`<div class="budget-empty"><span>还没设每月预算</span><button type="button" class="linkbtn" id="budgetBtn">设置预算</button></div>`}
   else{
@@ -766,7 +768,8 @@ function renderBudget(out){
     box.innerHTML=`<div class="budget-top"><span>每月预算 <b class="num">¥${fmt(state.budget)}</b></span><button type="button" class="linkbtn" id="budgetBtn">修改预算</button></div>
       <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.min(100,Math.round(r*100))}"><i class="${cls}" style="width:${Math.min(100,r*100)}%"></i></div>
       <div class="budget-caption"><span>已使用 ${Math.round(r*100)}%</span><span>${left>=0?`还可花 <b class="num">¥${fmt(left)}</b>`:`<b class="t-out">已超 ¥${fmt(-left)}</b>`}</span></div>
-      ${perDay?`<div class="budget-caption"><span>${perDay}</span></div>`:""}`;
+      ${perDay?`<div class="budget-caption"><span>${perDay}</span></div>`:""}
+      ${repay>0?`<div class="budget-caption"><span>本月还款 ¥${fmt(repay)} 不计入预算</span></div>`:""}`;
   }
   $("budgetBtn").onclick=openBudget;
 }
@@ -999,7 +1002,7 @@ function renderAnalysis(txs,out,inc){
     const ch=pct(out,pOut);
     items.push({k:"总支出环比",v:ch==null?"—":(ch>0?"+":"")+ch+"%",tone:ch==null?"":ch>0?"up":"down",d:pOut?`上月 ¥${fmt(pOut)}，本月${isCur?"到目前":""} ¥${fmt(out)}。`:`${p.m} 月没有支出记录，暂时没法对比。`});
     const avg=Math.round(out/elapsed);let d=`按 ${elapsed} 天算。`;
-    if(isCur&&elapsed>=5&&elapsed<dim){const proj=projOut(txs,elapsed,dim);d=`照这个速度，月底约花 ¥${fmt(proj)}`+(state.budget?(proj>state.budget?`，会超预算 ¥${fmt(proj-state.budget)}。`:"，在预算之内。"):"。")}
+    if(isCur&&elapsed>=5&&elapsed<dim){const proj=projOut(txs,elapsed,dim);const pb=projOut(noRepay(txs),elapsed,dim);d=`照这个速度，月底约花 ¥${fmt(proj)}`+(state.budget?(pb>state.budget?`，预算内的开销会超 ¥${fmt(pb-state.budget)}。`:"，预算内的开销守得住。"):"。")}
     items.push({k:"日均支出",v:"¥"+fmt(avg),d});
     const cm=byCat(txs),pm=byCat(prev),diffs=Object.keys(Object.assign({},cm,pm)).map(c=>({c,d:(cm[c]||0)-(pm[c]||0)})).sort((a,b)=>Math.abs(b.d)-Math.abs(a.d));
     if(pOut&&diffs.length){const up=diffs.find(x=>x.d>0),dn=diffs.find(x=>x.d<0);
@@ -1042,7 +1045,7 @@ function buildAiPrompt(){
 - 只输出这几条，不要标题、不要 Markdown 符号、不要开场白和结尾。
 
 分析的月份：${y}-${pad(m)}${isCurMonth()?`（今天是 ${ymd(now)}，本月还没过完）`:""}
-每月预算：${state.budget?fmt(state.budget):"未设置"}
+每月预算：${state.budget?fmt(state.budget)+"（还款不计入预算），本月计入预算的支出 "+fmt(budgetSpent(txsOf(y,m))):"未设置"}
 经营说明：用户在做小生意（比如在闲鱼上垫钱代买、发货）。分类“经营”的支出是为订单垫付、还没回款的货款；分类“经营”的收入是已回款订单的净赚（到账减垫付）。目前待回款 ${state.txs.filter(t=>t.biz&&t.biz.status==="pending").length} 单，垫付中 ${fmt(state.txs.filter(t=>t.biz&&t.biz.status==="pending").reduce((a,t)=>a+t.amount,0))}。
 
 近 6 个月收支：
@@ -1083,8 +1086,8 @@ function ruleReview(){
       const second=cats.find(([c])=>flex.includes(c)&&c!==top);
       if(second&&second[1]>=out*0.12){const cap=r10(second[1]/elapsed*7*0.85);pts.push(`可以重点看看「${second[0]}」（¥${fmt(second[1])}），每周控制在 ¥${fmt(cap)} 以内会更从容。`)}}
   }
-  if(state.budget){const left=state.budget-out;
-    if(isCur){const rest=dim-elapsed+1,proj=elapsed>=3?projOut(txs,elapsed,dim):out;
+  if(state.budget){const bo=budgetSpent(txs),left=state.budget-bo;
+    if(isCur){const rest=dim-elapsed+1,proj=elapsed>=3?projOut(noRepay(txs),elapsed,dim):bo;
       if(left<=0)pts.push(`本月预算 ¥${fmt(state.budget)} 已经超了 ¥${fmt(-left)}，剩下 ${rest} 天尽量只花必要的钱。`);
       else if(proj>state.budget)pts.push(`照现在的速度会超预算 ¥${fmt(proj-state.budget)}。后面 ${rest} 天每天控制在 ¥${fmt(Math.floor(left/rest))} 以内就能守住。`);
       else pts.push(`预算还剩 ¥${fmt(left)}，后面 ${rest} 天平均每天能花 ¥${fmt(Math.floor(left/rest))}，在预算之内。`);}
